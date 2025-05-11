@@ -28,6 +28,7 @@ NOTE_TEMPO_END = 73    # C#4 ends collection and applies tempo change
 channel_to_edit = 0
 step_to_edit = 0
 
+# midi노트 배열을 단일 정수로 변환 
 def midi_notes_to_int(midi_notes):
     """
     Convert an array of MIDI note values (7 bits each) into a single integer
@@ -49,13 +50,14 @@ def midi_notes_to_int(midi_notes):
         result = (result << 7) | note_value
     return result
 
+# 초기화 함수: 스크립트가 로드될떄의 호출되는 함수 -> 초기화시 메세지 출력
 def OnInit():
     """Called when the script is loaded by FL Studio"""
     print("FL Studio Terminal Beat Builder initialized")
     print("Type 'help' for a list of commands")
-    
     return
 
+# 종료시 스크립트의 상태를 업데이트
 def OnDeInit():
     """Called when the script is unloaded by FL Studio"""
     global running
@@ -63,16 +65,19 @@ def OnDeInit():
     print("FL Studio Terminal Beat Builder deinitialized")
     return
 
+# 
 def OnRefresh(flags):
     """Called when FL Studio's state changes or when a refresh is needed"""
     # Update terminal with current state if needed
     return
 
+# MIDI 입력 처리: 이 함수는 MIDI메시지를 수진 할태마다 호출됨
 def OnMidiIn(event):
     """Called whenever the device sends a MIDI message to FL Studio"""
     #print(f"MIDI In - Status: {event.status}, Data1: {event.data1}, Data2: {event.data2}")
     return
 
+# 템포 변경 함수: 주어진 BPM값으로 FLstudio의 템포를 변경함 -> 이 함수는 midi 메시지 를 통해 수진값을 기반으로 템포를 조정
 def change_tempo(bpm):
     """
     Change the tempo in FL Studio to the specified BPM value
@@ -92,22 +97,31 @@ def change_tempo(bpm):
         midi.REC_Control | midi.REC_UpdateControl
     )
 
+# 날 죽일순없지 굴욕의 연속이였어. 아주 천하고 너저분해도 살아남아서 내가 다 먹어버릴거야 그게 드라마지 내가 그렇게 할거야. 펑키하게 능글맞게 뻔뻔하게 보여주겠어 결과물로 결국 따먹어 버릴거야 굴복 시킬거야
 def process_received_midi(note, velocity):
 
+    # 함수내의 전역변수 
+    # 각 변수는 처리중인 노트의 속성(노트번호, 속도, 길이, 위치)을 저장
     global current_note, current_velocity, current_length, current_position
     global decimal_state, decimal_value, decimal_target
     
     # Special MIDI commands
-    DECIMAL_MARKER = 100   # Indicates next value is a decimal part
+    # 특수 MIDI명령 정의 
+    # 특정 MIDI 값에 특별한 의미를 부혀 
+    DECIMAL_MARKER = 100   # Indicates next value is a decimal -> part 소수점 실수를 말함
     LENGTH_MARKER = 101    # Next value affects length
     POSITION_MARKER = 102  # Next value affects position
     
     # Process based on message type
+    # DECIMAL_MARKER 가 수신되면 다음값이 소수부분임을 나타내기 위해 decimal_state를 1로 설정
     if note == DECIMAL_MARKER:
         # Next value will be a decimal
         decimal_state = 1
         return False
-        
+    
+
+    # 길이밎 위치 서러정 
+    # LEMGTH_MARKE, POSITION_MARKER 가 수신되면 다음값의 길이 or 위치를 설정하는 사용
     elif note == LENGTH_MARKER:
         # Next value affects length
         decimal_target = "length"
@@ -121,7 +135,8 @@ def process_received_midi(note, velocity):
         decimal_state = 0
         decimal_value = 0
         return False
-        
+    
+    # 소수 부분값 적용 
     elif decimal_state == 1:
         # This is a decimal part value
         decimal_value = note / 10.0  # Convert to decimal (0-9 becomes 0.0-0.9)
@@ -146,7 +161,8 @@ def process_received_midi(note, velocity):
             current_position = float(note)
             print(f"Set position whole: {current_position:.2f}")
         return False
-        
+    
+    # 노트 값 및 속성 설정
     else:
         # This is a note value and velocity
         # Check if we have a complete previous note to add
@@ -167,18 +183,21 @@ def process_received_midi(note, velocity):
         
         return add_note
 
-
+# midi 메세지 처리: midi 메시지를 수신할떄 호출되는 함수 -> 노트수를 세거나 노트를 배열 추가는 작업을 처리
 def OnMidiMsg(event, timestamp=0):
     """Called when a processed MIDI message is received"""
     
+    # 전역 변수 선언 초기화
     global receiving_mode, message_count, messages_received
     global current_note, current_velocity, current_length, current_position
     global decimal_state, decimal_target, midi_notes_array
     
+    # note_count, calues_received, midi_data, midi_note_array  등 모든 필요한 변수를 초기화
     if 'receiving_mode' not in globals():
         global receiving_mode
         receiving_mode = False
     
+    # 
     if 'note_count' not in globals():
         global note_count
         note_count = 0
@@ -196,10 +215,17 @@ def OnMidiMsg(event, timestamp=0):
         midi_notes_array = []
     
     # Only process Note On messages with velocity > 0
+    # midi노트로 온 메세지만 처리( satus가 NIDI_NOTEON과 MIDION+16 사이)
+    # velocity(세기)가 0보다 큰 메세지만 처리
     if event.status >= midi.MIDI_NOTEON and event.status < midi.MIDI_NOTEON + 16 and event.data2 > 0:
         note_value = event.data1
         
+        # note_value에 노트 번호를 저장 
         # Toggle receiving mode with note 0
+        # 노트 0을 특별한 컨트롤 신호로 사용
+        # 이 신호를 받으면 MIDI 노트 수신모드 시작 
+        # 모든 데이터 구조를 초기화 하고 함수 종료
+
         if note_value == 0 and not receiving_mode:
             receiving_mode = True
             print("Started receiving MIDI notes")
@@ -210,10 +236,13 @@ def OnMidiMsg(event, timestamp=0):
             event.handled = True
             return
         
+        # 노트 카운트 설명 
         # Only process further messages if in receiving mode
         if not receiving_mode:
             return
         
+        # 수신 모드가 아니면 함수 종료
+        # 수신 모드에서 첫번쨰 메세지는 총 몇개의 노트를 받을 지 지정하는 숫자로 해석
         # Second message is the note count
         if note_count == 0:
             note_count = note_value
@@ -221,10 +250,12 @@ def OnMidiMsg(event, timestamp=0):
             event.handled = True
             return
         
+        # 이 부분 모든 후속 midi 값을 리스트에 추가한다
         # All subsequent messages are MIDI values (6 per note)
         midi_data.append(note_value)
         values_received += 1
         
+        # 6개 값마다 하나의 완성된 노트로 처리 
         # Process completed notes (every 6 values)
         if len(midi_data) >= 6 and len(midi_data) % 6 == 0:
             # Process the last complete note
@@ -236,15 +267,18 @@ def OnMidiMsg(event, timestamp=0):
             position_whole = midi_data[i+4]
             position_decimal = midi_data[i+5]
             
+            # 이 부분에서 정수와 소수 부분을 결합하여 완전한 길이와 위치값을 계산
             # Calculate full values
             length = length_whole + (length_decimal / 10.0)
             position = position_whole + (position_decimal / 10.0)
             
+            # 처리된 노트를 midi_notes_artay에 추가하고 현제 상태를 출력합니다
             # Add to notes array
             midi_notes_array.append((note, velocity, length, position))
             print(f"Added note: note={note}, velocity={velocity}, length={length:.1f}, position={position:.1f}")
             print(f"Current array size: {len(midi_notes_array)}")
 
+            # 모든 예상 노트를 받았스면 종료신호(노트 127)를 받으면 수신 모드 종료
             if len(midi_notes_array) >= note_count or note_value == 127:
                 print(f"Received all {len(midi_notes_array)} notes or termination signal")
                 receiving_mode = False
@@ -259,6 +293,7 @@ def OnMidiMsg(event, timestamp=0):
                     print("\nFinal array:")
                     print(midi_notes_array)
                     
+                    # 노트를 기록, FL Studio에 
                     # Process the notes using the record_notes_batch function
                     record_notes_batch(midi_notes_array)
                 
