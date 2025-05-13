@@ -239,6 +239,43 @@ try:
         #debug_log(f"Melody transfer complete: {len(notes)} notes sent")
         return f"Melody successfully transferred: {len(notes)} notes ({len(midi_data)} MIDI values) sent to FL Studio"
 
+    @mcp.tool()
+    def receive_midi_note(note_data):
+        """
+        Receive MIDI note data from an external keyboard and process it.
+        
+        Args:
+            note_data (str): String containing note data in format "note,velocity,length,position"
+                            with each note on a new line
+        """
+        notes = []
+        for line in note_data.strip().split('\n'):
+            if not line.strip():
+                continue
+
+            parts = line.strip().split(',')
+            if len(parts) != 4:
+                debug_log(f"Warning: Skipping invalid line: {line}")
+                continue
+            
+            try:
+                note = min(127, max(0, int(parts[0])))
+                velocity = min(127, max(0, int(parts[1])))
+                length = max(0, float(parts[2]))
+                position = max(0, float(parts[3]))
+                notes.append((note, velocity, length, position))
+            except ValueError:
+                debug_log(f"Warning: Skipping line with invalid values: {line}")
+                continue
+
+        if not notes:
+            return "No valid notes found in input data"
+        
+        # Process the received notes (예: MIDI 노트를 재생하거나 다른 작업 수행)
+        for note, velocity, length, position in notes:
+            send_midi_note(note, velocity, length)  # send_midi_note 함수를 사용하여 노트를 전송
+
+    
     # Send a MIDI note message
     @mcp.tool()
     def send_midi_note(note, velocity=1, duration=0.01):
