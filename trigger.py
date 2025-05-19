@@ -76,7 +76,7 @@ try:
 
     @mcp.tool()
     def play():
-        """Send MIDI message to start playback in FL Studio"""
+        """Send MIDI message to start playback in FL Studio""" 
         # Send Note On for C3 (note 60)
         output_port.send(mido.Message('note_on', note=60, velocity=100))
         time.sleep(0.1)  # Small delay
@@ -275,7 +275,12 @@ try:
         for note, velocity, length, position in notes:
             send_midi_note(note, velocity, length)  # send_midi_note 함수를 사용하여 노트를 전송
 
-    
+    # RAG 에 접속 해서 백터 데이터 가져오는 것
+    # 저장되는 데이터의 형태를 알아야해 
+    # 바이너리인데 ??? 
+
+
+
     # Send a MIDI note message
     @mcp.tool()
     def send_midi_note(note, velocity=1, duration=0.01):

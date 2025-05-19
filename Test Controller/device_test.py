@@ -97,7 +97,6 @@ def change_tempo(bpm):
         midi.REC_Control | midi.REC_UpdateControl
     )
 
-# 날 죽일순없지 굴욕의 연속이였어. 아주 천하고 너저분해도 살아남아서 내가 다 먹어버릴거야 그게 드라마지 내가 그렇게 할거야. 펑키하게 능글맞게 뻔뻔하게 보여주겠어 결과물로 결국 따먹어 버릴거야 굴복 시킬거야
 def process_received_midi(note, velocity):
 
     # 함수내의 전역변수 
