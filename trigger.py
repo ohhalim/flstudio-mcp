@@ -1,304 +1,265 @@
-from typing import Any
-import httpx
 import sys
-from mcp.server.fastmcp import FastMCP
+import time
 import mido
 from mido import Message
-import time
+from typing import List, Tuple, Optional
 
-# 디버깅 로그 함수
-def debug_log(message):
+# FastMCP 서버 클래스
+class FastMCP:
+    def __init__(self, name="flstudio"):
+        self.name = name
+        self.tools = {}
+        self.output_port = None
+        self.midi_port_name = None
+        
+    def tool(self):
+        """도구 등록 데코레이터"""
+        def decorator(func):
+            self.tools[func.__name__] = func
+            return func
+        return decorator
+        
+    def run(self, transport='stdio'):
+        """서버 실행"""
+        if transport == 'stdio':
+            self._run_stdio()
+            
+    def _run_stdio(self):
+        """표준 입출력을 통한 서버 실행"""
+        import json
+        import sys
+        
+        # 사용 가능한 도구 목록 출력
+        sys.stderr.write(f"MCP 서버 실행 중: {self.name}\n")
+        sys.stderr.write(f"사용 가능한 도구: {list(self.tools.keys())}\n")
+        sys.stderr.flush()
+        
+        while True:
+            try:
+                line = sys.stdin.readline()
+                if not line:
+                    break
+                    
+                request = json.loads(line)
+                function_name = request.get('name')
+                arguments = request.get('arguments', {})
+                
+                if function_name in self.tools:
+                    result = self.tools[function_name](**arguments)
+                    response = {
+                        'result': result
+                    }
+                    sys.stdout.write(json.dumps(response) + '\n')
+                    sys.stdout.flush()
+                else:
+                    sys.stderr.write(f"함수를 찾을 수 없음: {function_name}\n")
+                    sys.stderr.flush()
+                    
+            except Exception as e:
+                sys.stderr.write(f"오류 발생: {e}\n")
+                sys.stderr.flush()
+
+# 메인 서버 구현
+def run_server():
+    try:
+        # 서버 초기화
+        log("FL Studio MCP 서버 시작...")
+        
+        # 사용 가능한 MIDI 포트 확인
+        available_ports = mido.get_output_names()
+        log(f"사용 가능한 MIDI 포트: {available_ports}")
+        
+        # FastMCP 서버 초기화
+        mcp = FastMCP("flstudio")
+        
+        # MIDI 포트 연결
+        if available_ports:
+            midi_port = available_ports[0]
+            log(f"MIDI 포트 사용: {midi_port}")
+            output_port = mido.open_output(midi_port)
+            log(f"MIDI 포트 연결 성공: {midi_port}")
+        else:
+            log("오류: 사용 가능한 MIDI 출력 포트가 없습니다!")
+            sys.exit(1)
+        
+        # MIDI 노트 매핑
+        NOTE_PLAY = 60          # C3
+        NOTE_STOP = 61          # C#3
+        
+        # 도구 정의: MIDI 포트 목록
+        @mcp.tool()
+        def list_midi_ports():
+            """사용 가능한 모든 MIDI 입력 포트 목록 표시"""
+            return mido.get_output_names()
+        
+        # 도구 정의: 재생
+        @mcp.tool()
+        def play():
+            """FL Studio에서 재생을 시작하는 MIDI 메시지 전송"""
+            output_port.send(Message('note_on', note=NOTE_PLAY, velocity=100))
+            time.sleep(0.1)
+            output_port.send(Message('note_off', note=NOTE_PLAY, velocity=0))
+            log("재생 명령 전송")
+            return "재생 시작"
+        
+        # 도구 정의: 정지
+        @mcp.tool()
+        def stop():
+            """FL Studio에서 재생을 정지하는 MIDI 메시지 전송"""
+            output_port.send(Message('note_on', note=NOTE_STOP, velocity=100))
+            time.sleep(0.1)
+            output_port.send(Message('note_off', note=NOTE_STOP, velocity=0))
+            log("정지 명령 전송")
+            return "재생 정지"
+        
+        # 도구 정의: 멜로디 전송
+        @mcp.tool()
+        def send_melody(notes_data: str):
+            """
+            FL Studio로 타이밍 정보가 포함된 MIDI 노트 시퀀스 전송
+            
+            Args:
+                notes_data (str): "노트,벨로시티,길이,위치" 형식의 노트 데이터 문자열
+                                각 노트는 새 줄로 구분
+            """
+            # 노트 파싱
+            notes = []
+            for line in notes_data.strip().split('\n'):
+                if not line.strip():
+                    continue
+                
+                parts = line.strip().split(',')
+                if len(parts) != 4:
+                    log(f"경고: 유효하지 않은 줄 건너뜀: {line}")
+                    continue
+                
+                try:
+                    note = min(127, max(0, int(parts[0])))
+                    velocity = min(127, max(0, int(parts[1])))
+                    length = max(0, float(parts[2]))
+                    position = max(0, float(parts[3]))
+                    notes.append((note, velocity, length, position))
+                except ValueError:
+                    log(f"경고: 유효하지 않은 값이 있는 줄 건너뜀: {line}")
+                    continue
+            
+            if not notes:
+                return "입력 데이터에서 유효한 노트를 찾을 수 없음"
+            
+            # MIDI 데이터 배열 생성 (노트당 6개 값)
+            midi_data = []
+            for note, velocity, length, position in notes:
+                # 1. 노트 값 (0-127)
+                midi_data.append(note)
+                
+                # 2. 벨로시티 값 (0-127)
+                midi_data.append(velocity)
+                
+                # 3. 길이 정수부 (0-127)
+                length_whole = min(127, int(length))
+                midi_data.append(length_whole)
+                
+                # 4. 길이 소수부 (0-9)
+                length_decimal = int(round((length - length_whole) * 10)) % 10
+                midi_data.append(length_decimal)
+                
+                # 5. 위치 정수부 (0-127)
+                position_whole = min(127, int(position))
+                midi_data.append(position_whole)
+                
+                # 6. 위치 소수부 (0-9)
+                position_decimal = int(round((position - position_whole) * 10)) % 10
+                midi_data.append(position_decimal)
+            
+            # MIDI 전송 시작
+            log(f"{len(notes)}개 노트 전송 ({len(midi_data)} MIDI 값)...")
+            
+            # 시작 신호 (노트 0)
+            send_midi_note(output_port, 0)
+            time.sleep(0.01)
+            
+            # 노트 총 개수 전송
+            send_midi_note(output_port, min(127, len(notes)))
+            time.sleep(0.01)
+            
+            # 모든 MIDI 데이터 값 전송
+            for value in midi_data:
+                send_midi_note(output_port, value)
+            
+            # 종료 신호 (노트 127)
+            send_midi_note(output_port, 127)
+            
+            return f"멜로디 전송 완료: {len(notes)}개 노트({len(midi_data)} MIDI 값) FL Studio로 전송됨"
+        
+        # 도구 정의: MIDI 노트 수신
+        @mcp.tool()
+        def receive_midi_note(note_data: str):
+            """
+            외부 키보드에서 MIDI 노트 데이터를 수신하고 처리
+            
+            Args:
+                note_data (str): "노트,벨로시티,길이,위치" 형식의 노트 데이터 문자열
+                                각 노트는 새 줄로 구분
+            """
+            notes = []
+            for line in note_data.strip().split('\n'):
+                if not line.strip():
+                    continue
+                
+                parts = line.strip().split(',')
+                if len(parts) != 4:
+                    log(f"경고: 유효하지 않은 줄 건너뜀: {line}")
+                    continue
+                
+                try:
+                    note = min(127, max(0, int(parts[0])))
+                    velocity = min(127, max(0, int(parts[1])))
+                    length = max(0, float(parts[2]))
+                    position = max(0, float(parts[3]))
+                    notes.append((note, velocity, length, position))
+                except ValueError:
+                    log(f"경고: 유효하지 않은 값이 있는 줄 건너뜀: {line}")
+                    continue
+            
+            if not notes:
+                return "입력 데이터에서 유효한 노트를 찾을 수 없음"
+            
+            # 수신된 노트 처리
+            for note, velocity, length, _ in notes:
+                send_midi_note(output_port, note, velocity, length)
+                
+            return f"{len(notes)}개 노트 처리됨"
+        
+        # 도구 정의: MIDI 노트 전송
+        @mcp.tool()
+        def send_midi_note(note, velocity=100, duration=0.01):
+            """지정된 지속 시간으로 MIDI 노트 온/오프 메시지 전송"""
+            output_port.send(Message('note_on', note=int(note), velocity=int(velocity)))
+            time.sleep(float(duration))
+            output_port.send(Message('note_off', note=int(note), velocity=0))
+            log(f"MIDI 노트 {note} 전송됨")
+            return f"노트 {note} 전송됨"
+        
+        # 서버 실행
+        log("stdio 전송으로 MCP 서버 실행...")
+        mcp.run(transport='stdio')
+        
+    except Exception as e:
+        log(f"FL Studio MCP 초기화 오류: {e}")
+        sys.exit(1)
+
+# 유틸리티 함수: 디버그 로그
+def log(message):
+    """stderr에 디버그 메시지 출력"""
     print(message, file=sys.stderr, flush=True)
 
-try:
-    debug_log("Starting FL Studio MCP server...")
-    
-    # 사용 가능한 MIDI 포트 확인 및 로깅
-    available_ports = mido.get_output_names()
-    debug_log(f"Available MIDI ports: {available_ports}")
-    
-    # Initialize FastMCP server
-    mcp = FastMCP("flstudio")
-    
-    # 첫 번째 사용 가능한 포트 사용 (인코딩 문제 회피)
-    if available_ports:
-        # 정확한 이름을 사용합니다 - 출력된 이름 그대로 복사
-        midi_port = available_ports[0]  # 'IAC ÎìúÎùºÏù¥Î≤Ñ Î≤ÑÏä§ 1' 
-        debug_log(f"Using MIDI port: {midi_port}")
-    else:
-        debug_log("ERROR: No MIDI output ports available!")
-        sys.exit(1)
-    
-    # 실제 포트 목록에서 찾은 이름 사용
-    output_port = mido.open_output(midi_port)
-    debug_log(f"Successfully opened MIDI port: {midi_port}")
-    
-    # MIDI Note mappings for FL Studio commands
-    NOTE_PLAY = 60          # C3
-    NOTE_STOP = 61          # C#3
-    NOTE_RECORD = 62        # D3
-    NOTE_NEW_PROJECT = 63   # D#3
-    NOTE_SET_BPM = 64       # E3
-    NOTE_NEW_PATTERN = 65   # F3
-    NOTE_SELECT_PATTERN = 66  # F#3
-    NOTE_ADD_CHANNEL = 67   # G3
-    NOTE_NAME_CHANNEL = 68  # G#3
-    NOTE_ADD_NOTE = 69      # A3
-    NOTE_ADD_TO_PLAYLIST = 70  # A#3
-    NOTE_SET_PATTERN_LEN = 71  # B3
-    NOTE_CHANGE_TEMPO = 72   
+# MIDI 노트 전송 헬퍼 함수
+def send_midi_note(port, note, velocity=100, duration=0.01):
+    """MIDI 포트로 노트 온/오프 메시지 전송"""
+    port.send(Message('note_on', note=note, velocity=velocity))
+    time.sleep(duration)
+    port.send(Message('note_off', note=note, velocity=0))
 
-    # Define custom MIDI CC messages for direct step sequencer grid control
-    CC_SELECT_CHANNEL = 100  # Select which channel to edit
-    CC_SELECT_STEP = 110     # Select which step to edit
-    CC_TOGGLE_STEP = 111     # Toggle the selected step on/off
-    CC_STEP_VELOCITY = 112   # Set velocity for the selected step
-
-    # Drum sound MIDI notes
-    KICK = 36      # C1
-    SNARE = 38     # D1
-    CLAP = 39      # D#1
-    CLOSED_HAT = 42  # F#1
-    OPEN_HAT = 46  # A#1
-
-    @mcp.tool()
-    def list_midi_ports():
-        """List all available MIDI input ports"""
-        debug_log("\nAvailable MIDI Input Ports:")
-        input_ports = mido.get_output_names()
-        if not input_ports:
-            debug_log("  No MIDI input ports found")
-        else:
-            for i, port in enumerate(input_ports):
-                debug_log(f"  {i}: {port}")
-        
-        return input_ports
-
-    @mcp.tool()
-    def play():
-        """Send MIDI message to start playback in FL Studio""" 
-        # Send Note On for C3 (note 60)
-        output_port.send(mido.Message('note_on', note=60, velocity=100))
-        time.sleep(0.1)  # Small delay
-        output_port.send(mido.Message('note_off', note=60, velocity=0))
-        debug_log("Sent Play command")
-
-    @mcp.tool()
-    def stop():
-        """Send MIDI message to stop playback in FL Studio"""
-        # Send Note On for C#3 (note 61)
-        output_port.send(mido.Message('note_on', note=61, velocity=100))
-        time.sleep(0.1)  # Small delay
-        output_port.send(mido.Message('note_off', note=61, velocity=0))
-        debug_log("Sent Stop command")
-
-    def int_to_midi_bytes(value):
-        """
-        Convert an integer value into an array of MIDI-compatible bytes (7-bit values)
-        
-        Args:
-            value (int): The integer value to convert
-            
-        Returns:
-            list: Array of MIDI bytes (each 0-127)
-        """
-        if value < 0:
-            debug_log("Warning: Negative values not supported, converting to positive")
-            value = abs(value)
-        
-        # Special case for zero
-        if value == 0:
-            return [0]
-        
-        # Convert to MIDI bytes (7-bit values, MSB first)
-        midi_bytes = []
-        while value > 0:
-            # Extract the lowest 7 bits and prepend to array
-            midi_bytes.insert(0, value & 0x7F)  # 0x7F = 127 (binary: 01111111)
-            # Shift right by 7 bits
-            value >>= 7
-        
-        return midi_bytes
-
-    def change_tempo(bpm):
-        """
-        Change the tempo in FL Studio using a sequence of MIDI notes
-        
-        This function converts a BPM value to an array of MIDI notes,
-        sends a start marker, the notes, and an end marker to trigger
-        a tempo change in FL Studio.
-        
-        Args:
-            bpm (float): The desired tempo in beats per minute
-        """
-        # Ensure BPM is within a reasonable range
-        if bpm < 20 or bpm > 999:
-            debug_log(f"Warning: BPM value {bpm} is outside normal range (20-999)")
-            bpm = max(20, min(bpm, 999))
-        
-        # Convert BPM to integer
-        bpm_int = int(bpm)
-        
-        # Convert to MIDI bytes
-        midi_notes = int_to_midi_bytes(bpm_int)
-        
-        debug_log(f"Setting tempo to {bpm_int} BPM using note array: {midi_notes}")
-        
-        # Send start marker (note 72)
-        send_midi_note(72)
-        time.sleep(0.2)
-        
-        # Send each note in the array
-        for note in midi_notes:
-            send_midi_note(note)
-            time.sleep(0.1)
-        
-        # Send end marker (note 73)
-        send_midi_note(73)
-        time.sleep(0.2)
-        
-        debug_log(f"Tempo change to {bpm_int} BPM sent successfully using {len(midi_notes)} notes")
-
-    @mcp.tool()
-    def send_melody(notes_data):
-        """
-        Send a sequence of MIDI notes with timing information to FL Studio for recording
-        
-        Args:
-            notes_data (str): String containing note data in format "note,velocity,length,position"
-                            with each note on a new line
-        """
-        # Parse the notes_data string into a list of note tuples
-        notes = []
-        for line in notes_data.strip().split('\n'):
-            if not line.strip():
-                continue
-                
-            parts = line.strip().split(',')
-            if len(parts) != 4:
-                debug_log(f"Warning: Skipping invalid line: {line}")
-                continue
-                
-            try:
-                note = min(127, max(0, int(parts[0])))
-                velocity = min(127, max(0, int(parts[1])))
-                length = max(0, float(parts[2]))
-                position = max(0, float(parts[3]))
-                notes.append((note, velocity, length, position))
-            except ValueError:
-                debug_log(f"Warning: Skipping line with invalid values: {line}")
-                continue
-        
-        if not notes:
-            return "No valid notes found in input data"
-        
-        # Create the MIDI data array (6 values per note)
-        midi_data = []
-        for note, velocity, length, position in notes:
-            # 1. Note value (0-127)
-            midi_data.append(note)
-            
-            # 2. Velocity value (0-127)
-            midi_data.append(velocity)
-            
-            # 3. Length whole part (0-127)
-            length_whole = min(127, int(length))
-            midi_data.append(length_whole)
-            
-            # 4. Length decimal part (0-9)
-            length_decimal = int(round((length - length_whole) * 10)) % 10
-            midi_data.append(length_decimal)
-            
-            # 5. Position whole part (0-127)
-            position_whole = min(127, int(position))
-            midi_data.append(position_whole)
-            
-            # 6. Position decimal part (0-9)
-            position_decimal = int(round((position - position_whole) * 10)) % 10
-            midi_data.append(position_decimal)
-        
-        # Start MIDI transfer
-        debug_log(f"Transferring {len(notes)} notes ({len(midi_data)} MIDI values)...")
-        
-        # Initial toggle signal (note 0)
-        send_midi_note(0)
-        time.sleep(0.01)
-        
-        # Send total count of notes
-        send_midi_note(min(127, len(notes)))
-        time.sleep(0.01)
-        
-        # Send all MIDI data values
-        for i, value in enumerate(midi_data):
-            send_midi_note(value)
-            #time.sleep(0.1)
-            #debug_log(f"Sent MIDI value {i+1}/{len(midi_data)}: {value}")
-        
-        send_midi_note(127)
-
-        #debug_log(f"Melody transfer complete: {len(notes)} notes sent")
-        return f"Melody successfully transferred: {len(notes)} notes ({len(midi_data)} MIDI values) sent to FL Studio"
-
-    @mcp.tool()
-    def receive_midi_note(note_data):
-        """
-        Receive MIDI note data from an external keyboard and process it.
-        
-        Args:
-            note_data (str): String containing note data in format "note,velocity,length,position"
-                            with each note on a new line
-        """
-        notes = []
-        for line in note_data.strip().split('\n'):
-            if not line.strip():
-                continue
-
-            parts = line.strip().split(',')
-            if len(parts) != 4:
-                debug_log(f"Warning: Skipping invalid line: {line}")
-                continue
-            
-            try:
-                note = min(127, max(0, int(parts[0])))
-                velocity = min(127, max(0, int(parts[1])))
-                length = max(0, float(parts[2]))
-                position = max(0, float(parts[3]))
-                notes.append((note, velocity, length, position))
-            except ValueError:
-                debug_log(f"Warning: Skipping line with invalid values: {line}")
-                continue
-
-        if not notes:
-            return "No valid notes found in input data"
-        
-        # Process the received notes (예: MIDI 노트를 재생하거나 다른 작업 수행)
-        for note, velocity, length, position in notes:
-            send_midi_note(note, velocity, length)  # send_midi_note 함수를 사용하여 노트를 전송
-
-    # RAG 에 접속 해서 백터 데이터 가져오는 것
-    # 저장되는 데이터의 형태를 알아야해 
-    # 바이너리인데 ??? 
-
-
-
-    # Send a MIDI note message
-    @mcp.tool()
-    def send_midi_note(note, velocity=1, duration=0.01):
-        """Send a MIDI note on/off message with specified duration"""
-        note_on = Message('note_on', note=note, velocity=velocity)
-        output_port.send(note_on)
-        #debug_log(f"Sent MIDI note {note} (on), velocity {velocity}")
-        time.sleep(duration)
-        note_off = Message('note_off', note=note, velocity=0)
-        output_port.send(note_off)
-        debug_log(f"Sent MIDI note {note} (off)")
-        #time.sleep(0.1)  # Small pause between messages
-        
-    if __name__ == "__main__":
-        # Initialize and run the server
-        debug_log("Running MCP server with stdio transport...")
-        mcp.run(transport='stdio')
-
-except Exception as e:
-    debug_log(f"ERROR initializing FL Studio MCP: {e}")
-    sys.exit(1)
+# 메인 실행 부분
+if __name__ == "__main__":
+    run_server()
