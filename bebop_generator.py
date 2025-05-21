@@ -463,7 +463,7 @@ class BebopGenerator:
             json.dump(data, f, indent=2)
         print(f"데이터가 {filename}에 저장되었습니다.")
 
-# 사용 예시
+# 테스트 코드
 if __name__ == "__main__":
     # 비밥 생성기 초기화 (루트 노트 = C4, 템포 = 160bpm)
     generator = BebopGenerator(root_note=60, tempo=160)
@@ -485,15 +485,3 @@ if __name__ == "__main__":
     
     print(f"비밥 솔로 노트 수: {data['solo']['count']}")
     print(f"코드 컴핑 노트 수: {data['chords']['count']}")
-    
-    # 다른 코드 진행 예시: 버드 블루스
-    bird_blues = generator.generate_bebop_solo_and_chords(
-        scale_type='Bebop_Dominant',
-        progression_type='Bird_Blues',
-        solo_complexity=0.9,  # 매우 높은 복잡도의 솔로
-        chord_complexity=0.7,  # 높은 복잡도의 코드 컴핑
-        range_octaves=3        # 3옥타브 범위
-    )
-    
-    # JSON 파일로 저장
-    generator.save_to_json(bird_blues, "bebop_bird_blues.json")
