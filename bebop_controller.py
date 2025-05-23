@@ -540,7 +540,13 @@ def record_notes_batch(notes_array, channel_index):
             
         # 가장 긴 노트 기준으로 대기 시간 계산
         seconds_to_wait = (max_length * 60) / tempo
-        
+
+        # 안전을 위한 최대 대기 시간 설정 (예: 30초)
+        MAX_WAIT_TIME = 30
+        if seconds_to_wait > MAX_WAIT_TIME:
+            print(f"경고: 계산된 대기 시간({seconds_to_wait:.2f}초)이 너무 깁니다. {MAX_WAIT_TIME}초로 제한합니다.")
+            seconds_to_wait = MAX_WAIT_TIME
+
         print(f"{seconds_to_wait:.2f}초 대기 중...")
         
         # 계산된 시간 대기
