@@ -31,9 +31,12 @@ try:
         sys.exit(1)
     
     # 실제 포트 목록에서 찾은 이름 사용
-    output_port = mido.open_output(midi_port)
+    try:
+        output_port = mido.open_output(midi_port)
+    except IOError as exc:
+        debug_log(f"ERROR: Failed to open MIDI port '{midi_port}': {exc}")
+        sys.exit(1)
     debug_log(f"Successfully opened MIDI port: {midi_port}")
-    
     # MIDI Note 정의
     # 컨트롤 명령어
     NOTE_START_MELODY = 0    # 멜로디 수신 모드 시작
