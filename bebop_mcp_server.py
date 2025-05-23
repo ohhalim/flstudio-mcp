@@ -332,13 +332,17 @@ try:
 
     def send_midi_note(note, velocity=100, duration=0.01):
         """MIDI 노트 온/오프 메시지 전송"""
+        # MIDI 범위 검증
+        note = min(127, max(0, int(note)))
+        velocity = min(127, max(0, int(velocity)))
+        duration = max(0.001, float(duration))  # 너무 짧은 지속 시간 방지
+
         note_on = Message('note_on', note=note, velocity=velocity)
         output_port.send(note_on)
         time.sleep(duration)
         note_off = Message('note_off', note=note, velocity=0)
         output_port.send(note_off)
         debug_log(f"Sent MIDI note {note} (velocity: {velocity})")
-        
     if __name__ == "__main__":
         # 서버 초기화 및 실행
         debug_log("Running Bebop MCP server with stdio transport...")
