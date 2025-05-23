@@ -154,6 +154,22 @@ def OnMidiMsg(event, timestamp=0):
         # === 컨트롤 노트 처리 (0-10 범위의 노트) ===
         # 비밥 생성 (control note 6)
         if note_value == 6 and receive_mode == ReceiveMode.IDLE and HAS_GENERATOR:
+            print("비밥 솔로 및 코드 생성 시작...")
+            generate_bebop_data()
+            event.handled = True
+            return
+
+        # 노트 0: 멜로디 수신 모드 시작
+        if note_value == 0 and receive_mode == ReceiveMode.IDLE:
+            receive_mode = ReceiveMode.MELODY
+            print("멜로디/솔로 노트 수신 시작")
+            midi_data = []
+            note_count = 0
+            values_received = 0
+            solo_notes = []
+            event.handled = True
+            return
+
         # 노트 1: 코드 수신 모드 시작
         if note_value == 1 and receive_mode == ReceiveMode.IDLE:
             receive_mode = ReceiveMode.CHORDS
