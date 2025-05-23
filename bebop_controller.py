@@ -25,6 +25,14 @@ MELODY_CHANNEL = 0  # 솔로 라인용 채널
 CHORD_CHANNEL = 1   # 코드 컴핑용 채널
 SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "bebop_settings.json")
 
+# 패턴 관리 변수
+current_pattern_index = 1  # 현재 사용할 패턴 인덱스
+pattern_names = {
+    'solo': [],      # 솔로 패턴 이름들
+    'chord': [],     # 코드 패턴 이름들
+    'both': []       # 솔로+코드 패턴 이름들
+}
+
 # 노트 수신 모드 열거형
 class ReceiveMode:
     IDLE = 0        # 대기 상태
@@ -41,7 +49,13 @@ settings = {
     "solo_complexity": 0.7,
     "chord_complexity": 0.5,
     "range_octaves": 2,
-    "last_generated_file": ""
+    "last_generated_file": "",
+    "current_pattern_index": 1,  # 현재 패턴 인덱스
+    "pattern_history": {         # 패턴 히스토리
+        "solo": [],
+        "chord": [],
+        "both": []
+    }
 }
 
 # 노트 수신 관련 변수
@@ -59,7 +73,12 @@ setting_type = ""
 # 설정 저장 및 로드 함수
 def save_settings():
     """설정을 JSON 파일로 저장"""
+    global current_pattern_index, pattern_names
     try:
+        # 현재 패턴 인덱스와 패턴 히스토리 업데이트
+        settings["current_pattern_index"] = current_pattern_index
+        settings["pattern_history"] = pattern_names
+        
         with open(SETTINGS_FILE, 'w') as f:
             json.dump(settings, f, indent=2)
         print("설정이 저장되었습니다.")
@@ -68,13 +87,23 @@ def save_settings():
 
 def load_settings():
     """저장된 설정 불러오기"""
-    global settings
+    global settings, current_pattern_index, pattern_names
     try:
         if os.path.exists(SETTINGS_FILE):
             with open(SETTINGS_FILE, 'r') as f:
                 loaded_settings = json.load(f)
                 settings.update(loaded_settings)
+                
+            # 패턴 관련 변수 복원
+            current_pattern_index = settings.get("current_pattern_index", 1)
+            pattern_names = settings.get("pattern_history", {
+                'solo': [],
+                'chord': [],
+                'both': []
+            })
+            
             print("설정을 불러왔습니다.")
+            print(f"다음 패턴 인덱스: {current_pattern_index}")
         else:
             print("저장된 설정이 없어 기본값을 사용합니다.")
     except Exception as e:
@@ -151,25 +180,19 @@ def OnMidiMsg(event, timestamp=0):
             event.handled = True
             return
         
-        # === 컨트롤 노트 처리 (0-10 범위의 노트) ===
-        # 비밥 생성 (control note 6)
-        if note_value == 6 and receive_mode == ReceiveMode.IDLE and HAS_GENERATOR:
-            print("비밥 솔로 및 코드 생성 시작...")
-            generate_bebop_data()
-            event.handled = True
-            return
-
+        # === 컨트롤 노트 처리 (0-30 범위의 노트) ===
+        
         # 노트 0: 멜로디 수신 모드 시작
         if note_value == 0 and receive_mode == ReceiveMode.IDLE:
             receive_mode = ReceiveMode.MELODY
-            print("멜로디/솔로 노트 수신 시작")
+            print("비밥 솔로 노트 수신 시작")
             midi_data = []
             note_count = 0
             values_received = 0
             solo_notes = []
             event.handled = True
             return
-
+            
         # 노트 1: 코드 수신 모드 시작
         if note_value == 1 and receive_mode == ReceiveMode.IDLE:
             receive_mode = ReceiveMode.CHORDS
@@ -184,8 +207,9 @@ def OnMidiMsg(event, timestamp=0):
         # 노트 2: 모든 수신된 노트 녹음 (멜로디 + 코드 함께)
         if note_value == 2 and receive_mode == ReceiveMode.IDLE:
             if solo_notes and chord_notes:
-                print("멜로디와 코드 함께 녹음 시작")
-                record_melody_and_chords()
+                print("멜로디와 코드를 새 패턴에 함께 녹음 시작...")
+                pattern_num, pattern_name = record_melody_and_chords()
+                print(f"멜로디+코드 녹음 완료: 패턴 {pattern_num} ({pattern_name})")
             else:
                 print("녹음할 멜로디 또는 코드 데이터가 없습니다")
             event.handled = True
@@ -194,8 +218,9 @@ def OnMidiMsg(event, timestamp=0):
         # 노트 3: 멜로디만 녹음
         if note_value == 3 and receive_mode == ReceiveMode.IDLE:
             if solo_notes:
-                print("멜로디만 녹음 시작")
-                record_notes_batch(solo_notes, MELODY_CHANNEL)
+                print("솔로 라인만 새 패턴에 녹음 시작...")
+                pattern_num, pattern_name = record_notes_batch(solo_notes, MELODY_CHANNEL, "solo")
+                print(f"솔로 녹음 완료: 패턴 {pattern_num} ({pattern_name})")
             else:
                 print("녹음할 멜로디 데이터가 없습니다")
             event.handled = True
@@ -204,8 +229,9 @@ def OnMidiMsg(event, timestamp=0):
         # 노트 4: 코드만 녹음
         if note_value == 4 and receive_mode == ReceiveMode.IDLE:
             if chord_notes:
-                print("코드만 녹음 시작")
-                record_notes_batch(chord_notes, CHORD_CHANNEL)
+                print("코드 진행만 새 패턴에 녹음 시작...")
+                pattern_num, pattern_name = record_notes_batch(chord_notes, CHORD_CHANNEL, "chord")
+                print(f"코드 녹음 완료: 패턴 {pattern_num} ({pattern_name})")
             else:
                 print("녹음할 코드 데이터가 없습니다")
             event.handled = True
@@ -215,7 +241,21 @@ def OnMidiMsg(event, timestamp=0):
         if note_value == 5 and receive_mode == ReceiveMode.IDLE:
             solo_notes = []
             chord_notes = []
-            print("모든 노트 데이터가 초기화되었습니다")
+            # 패턴 히스토리도 초기화
+            global pattern_names
+            pattern_names = {
+                'solo': [],
+                'chord': [],
+                'both': []
+            }
+            print("모든 노트 데이터와 패턴 히스토리가 초기화되었습니다")
+            event.handled = True
+            return
+            
+        # 노트 6: 비밥 생성
+        if note_value == 6 and receive_mode == ReceiveMode.IDLE and HAS_GENERATOR:
+            print("비밥 솔로 및 코드 생성 시작...")
+            generate_bebop_data()
             event.handled = True
             return
             
@@ -224,8 +264,9 @@ def OnMidiMsg(event, timestamp=0):
         # 노트 10: 솔로 녹음
         if note_value == 10 and receive_mode == ReceiveMode.IDLE:
             if solo_notes:
-                print("솔로 라인 녹음 시작...")
-                record_notes_batch(solo_notes, MELODY_CHANNEL)
+                print("비밥 솔로를 새 패턴에 녹음 시작...")
+                pattern_num, pattern_name = record_notes_batch(solo_notes, MELODY_CHANNEL, "solo")
+                print(f"비밥 솔로 녹음 완료: 패턴 {pattern_num} ({pattern_name})")
             else:
                 print("녹음할 솔로 데이터가 없습니다. 먼저 비밥 솔로를 생성하거나 불러오세요.")
             event.handled = True
@@ -234,8 +275,9 @@ def OnMidiMsg(event, timestamp=0):
         # 노트 11: 코드 녹음
         if note_value == 11 and receive_mode == ReceiveMode.IDLE:
             if chord_notes:
-                print("코드 컴핑 녹음 시작...")
-                record_notes_batch(chord_notes, CHORD_CHANNEL)
+                print("비밥 코드를 새 패턴에 녹음 시작...")
+                pattern_num, pattern_name = record_notes_batch(chord_notes, CHORD_CHANNEL, "chord")
+                print(f"비밥 코드 녹음 완료: 패턴 {pattern_num} ({pattern_name})")
             else:
                 print("녹음할 코드 데이터가 없습니다. 먼저 비밥 코드를 생성하거나 불러오세요.")
             event.handled = True
@@ -244,8 +286,9 @@ def OnMidiMsg(event, timestamp=0):
         # 노트 12: 솔로+코드 함께 녹음
         if note_value == 12 and receive_mode == ReceiveMode.IDLE:
             if solo_notes and chord_notes:
-                print("솔로와 코드 함께 녹음 시작...")
-                record_melody_and_chords()
+                print("비밥 솔로와 코드를 새 패턴에 함께 녹음 시작...")
+                pattern_num, pattern_name = record_melody_and_chords()
+                print(f"비밥 솔로+코드 녹음 완료: 패턴 {pattern_num} ({pattern_name})")
             else:
                 print("녹음할 솔로 또는 코드 데이터가 없습니다.")
             event.handled = True
@@ -278,13 +321,6 @@ def OnMidiMsg(event, timestamp=0):
         # 노트 30: 현재 설정 출력
         if note_value == 30 and receive_mode == ReceiveMode.IDLE:
             print_current_settings()
-            event.handled = True
-            return
-            
-        # 비밥 생성
-        if note_value == 0 and receive_mode == ReceiveMode.IDLE and HAS_GENERATOR:
-            print("비밥 솔로 및 코드 생성 시작...")
-            generate_bebop_data()
             event.handled = True
             return
         
@@ -378,9 +414,82 @@ def print_current_settings():
     print(f"솔로 복잡도: {settings['solo_complexity']:.2f}")
     print(f"코드 복잡도: {settings['chord_complexity']:.2f}")
     print(f"옥타브 범위: {settings['range_octaves']}")
+    print(f"현재 패턴 인덱스: {current_pattern_index}")
     if settings["last_generated_file"]:
         print(f"마지막 생성 파일: {settings['last_generated_file']}")
+    
+    # 생성된 패턴 목록 출력
+    if pattern_names['solo']:
+        print(f"솔로 패턴들: {', '.join(pattern_names['solo'])}")
+    if pattern_names['chord']:
+        print(f"코드 패턴들: {', '.join(pattern_names['chord'])}")
+    if pattern_names['both']:
+        print(f"솔로+코드 패턴들: {', '.join(pattern_names['both'])}")
     print("===================\n")
+
+# 패턴 관리 함수들
+def get_next_pattern_number():
+    """사용 가능한 다음 패턴 번호를 반환"""
+    global current_pattern_index
+    
+    # 현재 총 패턴 수 확인
+    total_patterns = patterns.patternCount()
+    
+    # 패턴 인덱스가 총 패턴 수를 넘으면 새 패턴 생성
+    if current_pattern_index >= total_patterns:
+        # FL Studio에서는 패턴을 자동으로 추가할 수 없으므로 기존 패턴 사용
+        # 사용자가 수동으로 패턴을 추가해야 함
+        print(f"경고: 패턴 {current_pattern_index}가 존재하지 않습니다. 패턴 {total_patterns - 1}를 사용합니다.")
+        current_pattern_index = total_patterns - 1
+    
+    return current_pattern_index
+
+def create_pattern_name(pattern_type, root_note, complexity=None):
+    """패턴 이름 생성"""
+    root_name = midi_note_name(root_note)
+    timestamp = time.strftime("%H%M%S")
+    
+    if pattern_type == "solo":
+        name = f"Bebop_Solo_{root_name}_{int(complexity*100):02d}_{timestamp}"
+    elif pattern_type == "chord":
+        name = f"Bebop_Chord_{root_name}_{int(complexity*100):02d}_{timestamp}"
+    elif pattern_type == "both":
+        name = f"Bebop_Full_{root_name}_{timestamp}"
+    else:
+        name = f"Bebop_{pattern_type}_{timestamp}"
+    
+    return name
+
+def switch_to_new_pattern(pattern_type, root_note=None, complexity=None):
+    """새로운 패턴으로 전환하고 이름 설정"""
+    global current_pattern_index
+    
+    # 다음 패턴 번호 가져오기
+    pattern_num = get_next_pattern_number()
+    
+    # 패턴으로 전환
+    patterns.jumpToPattern(pattern_num)
+    
+    # 패턴 이름 생성 및 설정
+    if root_note is None:
+        root_note = settings.get('root_note', 60)
+    
+    pattern_name = create_pattern_name(pattern_type, root_note, complexity)
+    
+    try:
+        # FL Studio API에 패턴 이름 설정 함수가 없을 수 있으므로 try-except 사용
+        patterns.setPatternName(pattern_num, pattern_name)
+        print(f"패턴 {pattern_num}으로 전환: {pattern_name}")
+    except AttributeError:
+        print(f"패턴 {pattern_num}으로 전환 (이름 자동 설정 불가)")
+    
+    # 패턴 이름 기록
+    pattern_names[pattern_type].append(f"P{pattern_num}: {pattern_name}")
+    
+    # 다음 사용할 패턴 인덱스 증가
+    current_pattern_index += 1
+    
+    return pattern_num, pattern_name
 
 # MIDI 노트 번호를 노트 이름으로 변환
 def midi_note_name(note_number):
@@ -470,18 +579,106 @@ def load_chords_from_file(file_path):
     except Exception as e:
         print(f"코드 데이터 로드 오류: {e}")
 
+# 녹음 헬퍼 함수
+def _record_notes_at_position(notes_at_position, position, is_multi_channel=False, channel_index=0):
+    """특정 위치에서 노트 녹음을 처리하는 내부 헬퍼 함수"""
+    # 이 그룹에서 가장 긴 노트 찾기
+    max_length = max(note[2] for note in notes_at_position)
+    
+    # 재생 중이면 먼저 정지
+    if transport.isPlaying():
+        transport.stop()
+    
+    # 프로젝트의 PPQ(분기별 펄스) 가져오기
+    ppq = general.getRecPPQ()
+    
+    # 비트를 틱으로 변환
+    position_ticks = int(position * ppq)
+    
+    # 재생 위치 설정
+    transport.setSongPos(position_ticks, 2)  # 2 = SONGLENGTH_ABSTICKS
+    
+    # 필요시 녹음 모드 전환
+    if not transport.isRecording():
+        transport.record()
+    
+    # 녹음 시작을 위한 재생 시작
+    transport.start()
+    
+    # 이 위치의 모든 노트 동시 녹음
+    if is_multi_channel:
+        # 멀티 채널 녹음 (채널 정보 포함)
+        for note, velocity, length, _, channel in notes_at_position:
+            channels.midiNoteOn(channel, note, velocity)
+    else:
+        # 단일 채널 녹음
+        for note, velocity, length, _ in notes_at_position:
+            channels.midiNoteOn(channel_index, note, velocity)
+    
+    # 현재 템포 가져오기
+    try:
+        import mixer
+        tempo = mixer.getCurrentTempo() / 1000
+    except (ImportError, AttributeError):
+        tempo = settings["tempo"]  # 설정된 템포 사용
+        
+    # 안전을 위한 최대 대기 시간 설정
+    MAX_WAIT_TIME = 30
+    seconds_to_wait = (max_length * 60) / tempo
+    if seconds_to_wait > MAX_WAIT_TIME:
+        print(f"경고: 계산된 대기 시간({seconds_to_wait:.2f}초)이 너무 깁니다. {MAX_WAIT_TIME}초로 제한합니다.")
+        seconds_to_wait = MAX_WAIT_TIME
+    
+    print(f"{seconds_to_wait:.2f}초 대기 중...")
+    
+    # 계산된 시간 대기
+    time.sleep(seconds_to_wait)
+    
+    # 모든 노트에 대한 노트 오프 이벤트 전송
+    if is_multi_channel:
+        # 멀티 채널 노트 오프
+        for note, _, _, _, channel in notes_at_position:
+            channels.midiNoteOn(channel, note, 0)
+    else:
+        # 단일 채널 노트 오프
+        for note, _, _, _ in notes_at_position:
+            channels.midiNoteOn(channel_index, note, 0)
+    
+    # 재생 정지
+    transport.stop()
+    
+    # 녹음 모드 활성화된 경우 종료
+    if transport.isRecording():
+        transport.record()
+    
+    # 녹음 간 짧은 일시 정지
+    time.sleep(0.2)
+
 # 노트 일괄 녹음 함수
-def record_notes_batch(notes_array, channel_index):
+def record_notes_batch(notes_array, channel_index, pattern_type="solo"):
     """
     FL Studio에 노트 일괄 녹음 (동시 노트 처리)
     
     Args:
         notes_array: (노트, 벨로시티, 길이_비트, 위치_비트) 튜플 목록
         channel_index: 녹음할 채널 인덱스
+        pattern_type: 패턴 타입 ("solo", "chord", "both")
     """
     if not notes_array:
         print("녹음할 노트가 없습니다")
         return
+    
+    # 복잡도 계산 (평균 노트 길이와 밀도 기반)
+    avg_length = sum(note[2] for note in notes_array) / len(notes_array)
+    note_density = len(notes_array) / (max(note[3] for note in notes_array) + 1) if notes_array else 0
+    complexity = min(1.0, (note_density * 0.1 + (1/avg_length) * 0.1))
+    
+    # 새로운 패턴으로 전환
+    pattern_num, pattern_name = switch_to_new_pattern(
+        pattern_type, 
+        settings.get('root_note', 60), 
+        complexity
+    )
         
     # 시작 위치별로 노트 정렬
     sorted_notes = sorted(notes_array, key=lambda x: x[3])
@@ -502,71 +699,15 @@ def record_notes_batch(notes_array, channel_index):
     for position in positions:
         notes_at_position = position_groups[position]
         
-        # 이 그룹에서 가장 긴 노트 찾기
-        max_length = max(note[2] for note in notes_at_position)
+        print(f"패턴 {pattern_num}, 채널 {channel_index}의 위치 {position}에서 {len(notes_at_position)}개 노트 녹음")
         
-        # 재생 중이면 먼저 정지
-        if transport.isPlaying():
-            transport.stop()
-        
-        # 프로젝트의 PPQ(분기별 펄스) 가져오기
-        ppq = general.getRecPPQ()
-        
-        # 비트를 틱으로 변환
-        position_ticks = int(position * ppq)
-        
-        # 재생 위치 설정
-        transport.setSongPos(position_ticks, 2)  # 2 = SONGLENGTH_ABSTICKS
-        
-        # 필요시 녹음 모드 전환
-        if not transport.isRecording():
-            transport.record()
-        
-        print(f"채널 {channel_index}의 위치 {position}에서 {len(notes_at_position)}개 노트 녹음")
-        
-        # 녹음 시작을 위한 재생 시작
-        transport.start()
-        
-        # 이 위치의 모든 노트 동시 녹음
-        for note, velocity, length, _ in notes_at_position:
-            channels.midiNoteOn(channel_index, note, velocity)
-        
-        # 현재 템포 가져오기
-        try:
-            import mixer
-            tempo = mixer.getCurrentTempo() / 1000
-        except (ImportError, AttributeError):
-            tempo = settings["tempo"]  # 설정된 템포 사용
-            
-        # 가장 긴 노트 기준으로 대기 시간 계산
-        seconds_to_wait = (max_length * 60) / tempo
-
-        # 안전을 위한 최대 대기 시간 설정 (예: 30초)
-        MAX_WAIT_TIME = 30
-        if seconds_to_wait > MAX_WAIT_TIME:
-            print(f"경고: 계산된 대기 시간({seconds_to_wait:.2f}초)이 너무 깁니다. {MAX_WAIT_TIME}초로 제한합니다.")
-            seconds_to_wait = MAX_WAIT_TIME
-
-        print(f"{seconds_to_wait:.2f}초 대기 중...")
-        
-        # 계산된 시간 대기
-        time.sleep(seconds_to_wait)
-        
-        # 모든 노트에 대한 노트 오프 이벤트 전송
-        for note, _, _, _ in notes_at_position:
-            channels.midiNoteOn(channel_index, note, 0)
-        
-        # 재생 정지
-        transport.stop()
-        
-        # 녹음 모드 활성화된 경우 종료
-        if transport.isRecording():
-            transport.record()
-        
-        # 녹음 간 짧은 일시 정지
-        time.sleep(0.2)
+        # 헬퍼 함수를 사용하여 노트 녹음
+        _record_notes_at_position(notes_at_position, position, is_multi_channel=False, channel_index=channel_index)
     
-    print(f"채널 {channel_index}에 모든 노트 녹음 완료")
+    print(f"패턴 {pattern_num} ({pattern_name})에 모든 노트 녹음 완료")
+    print(f"총 {len(notes_array)}개 노트, 복잡도: {complexity:.2f}")
+    
+    return pattern_num, pattern_name
 
 # 멜로디와 코드를 함께 녹음하는 함수
 def record_melody_and_chords():
@@ -574,6 +715,12 @@ def record_melody_and_chords():
     if not solo_notes or not chord_notes:
         print("멜로디 또는 코드 데이터가 없습니다")
         return
+    
+    # 새로운 패턴으로 전환 (솔로+코드 타입)
+    pattern_num, pattern_name = switch_to_new_pattern(
+        "both", 
+        settings.get('root_note', 60)
+    )
     
     # 모든 노트를 위치별로 병합하고 채널 정보 추가 (튜플: 노트, 벨로시티, 길이, 위치, 채널)
     all_notes = [(note, vel, length, pos, MELODY_CHANNEL) for note, vel, length, pos in solo_notes]
@@ -595,62 +742,12 @@ def record_melody_and_chords():
     for position in positions:
         notes_at_position = position_groups[position]
         
-        # 이 그룹에서 가장 긴 노트 찾기
-        max_length = max(note[2] for note in notes_at_position)
+        print(f"패턴 {pattern_num}의 위치 {position}에서 {len(notes_at_position)}개 노트 녹음 (멜로디+코드)")
         
-        # 재생 중이면 먼저 정지
-        if transport.isPlaying():
-            transport.stop()
-        
-        # 프로젝트의 PPQ(분기별 펄스) 가져오기
-        ppq = general.getRecPPQ()
-        
-        # 비트를 틱으로 변환
-        position_ticks = int(position * ppq)
-        
-        # 재생 위치 설정
-        transport.setSongPos(position_ticks, 2)  # 2 = SONGLENGTH_ABSTICKS
-        
-        # 필요시 녹음 모드 전환
-        if not transport.isRecording():
-            transport.record()
-        
-        print(f"위치 {position}에서 {len(notes_at_position)}개 노트 녹음 (멜로디+코드)")
-        
-        # 녹음 시작을 위한 재생 시작
-        transport.start()
-        
-        # 이 위치의 모든 노트 동시 녹음 (채널 구분)
-        for note, velocity, length, _, channel in notes_at_position:
-            channels.midiNoteOn(channel, note, velocity)
-        
-        # 현재 템포 가져오기
-        try:
-            import mixer
-            tempo = mixer.getCurrentTempo() / 1000
-        except (ImportError, AttributeError):
-            tempo = settings["tempo"]  # 설정된 템포 사용
-            
-        # 가장 긴 노트 기준으로 대기 시간 계산
-        seconds_to_wait = (max_length * 60) / tempo
-        
-        print(f"{seconds_to_wait:.2f}초 대기 중...")
-        
-        # 계산된 시간 대기
-        time.sleep(seconds_to_wait)
-        
-        # 모든 노트에 대한 노트 오프 이벤트 전송 (채널 구분)
-        for note, _, _, _, channel in notes_at_position:
-            channels.midiNoteOn(channel, note, 0)
-        
-        # 재생 정지
-        transport.stop()
-        
-        # 녹음 모드 활성화된 경우 종료
-        if transport.isRecording():
-            transport.record()
-        
-        # 녹음 간 짧은 일시 정지
-        time.sleep(0.2)
+        # 헬퍼 함수를 사용하여 노트 녹음 (멀티 채널 모드)
+        _record_notes_at_position(notes_at_position, position, is_multi_channel=True)
     
-    print("멜로디와 코드 함께 녹음 완료")
+    print(f"패턴 {pattern_num} ({pattern_name})에 멜로디와 코드 함께 녹음 완료")
+    print(f"솔로 노트: {len(solo_notes)}개, 코드 노트: {len(chord_notes)}개")
+    
+    return pattern_num, pattern_name
