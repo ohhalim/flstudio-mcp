@@ -309,21 +309,20 @@ try:
     @mcp.tool()
     def record_melody():
         """솔로 멜로디 녹음 명령 전송"""
-        send_midi_note(10)
+        send_midi_note(NOTE_RECORD_SOLO)
         return "솔로 멜로디 녹음 명령 전송 완료"
 
     @mcp.tool()
     def record_chords():
         """코드 진행 녹음 명령 전송"""
-        send_midi_note(11)
+        send_midi_note(NOTE_RECORD_CHORD)
         return "코드 진행 녹음 명령 전송 완료"
 
     @mcp.tool()
     def record_both():
         """솔로와 코드 함께 녹음 명령 전송"""
-        send_midi_note(12)
+        send_midi_note(NOTE_RECORD_BOTH)
         return "솔로와 코드 함께 녹음 명령 전송 완료"
-
     @mcp.tool()
     def print_settings():
         """현재 설정 출력 명령 전송"""
