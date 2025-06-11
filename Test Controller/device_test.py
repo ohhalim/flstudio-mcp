@@ -1,6 +1,6 @@
-# device_test.py
-# name=Test Controller
-# 간단한 비밥 솔로 전용 FL Studio 컨트롤러
+# harmony_controller.py
+# name=Harmony Controller
+# 실시간 화성 멜로디 전용 FL Studio 컨트롤러
 
 import transport
 import channels
@@ -9,23 +9,22 @@ import general
 import time
 
 # 전역 변수
-receiving_notes = False
-note_count = 0
-midi_data = []
-notes_array = []
+harmony_mode = False
+current_harmony_notes = []
+harmony_channel = 1  # 화성 전용 채널
 
 def OnInit():
     """FL Studio 로드 시 초기화"""
-    print("Simple Bebop Controller initialized")
+    print("Harmony Controller initialized")
     return
 
 def OnDeInit():
     """FL Studio 종료 시"""
-    print("Simple Bebop Controller deinitialized")
+    print("Harmony Controller deinitialized")
     return
 
 def OnRefresh(flags):
-    """상태 변경 시"""
+    """상태 변경"""
     return
 
 def OnMidiIn(event):
@@ -34,141 +33,111 @@ def OnMidiIn(event):
 
 def OnMidiMsg(event, timestamp=0):
     """MCP 서버에서 보낸 MIDI 메시지 처리"""
-    global receiving_notes, note_count, midi_data, notes_array
+    global harmony_mode, current_harmony_notes, harmony_channel
     
     # 노트 온 메시지만 처리
     if event.status >= midi.MIDI_NOTEON and event.status < midi.MIDI_NOTEON + 16 and event.data2 > 0:
         note_value = event.data1
         
-        # 시작 신호 (노트 0)
-        if note_value == 0 and not receiving_notes:
-            receiving_notes = True
-            midi_data = []
-            note_count = 0
-            notes_array = []
-            print("비밥 솔로 수신 시작")
+        # 화성 모드 시작 신호 (노트 1)
+        if note_value == 1:
+            harmony_mode = True
+            stop_all_harmony()  # 이전 화성 정리
+            print("화성 모드 시작")
             event.handled = True
             return
         
-        # 수신 모드가 아니면 무시
-        if not receiving_notes:
-            return
-        
-        # 노트 개수 설정 (두 번째 메시지)
-        if note_count == 0:
-            note_count = note_value
-            print(f"{note_count}개 노트 수신 예정")
+        # 화성 정지 신호 (노트 2)
+        if note_value == 2:
+            stop_all_harmony()
+            print("화성 정지")
             event.handled = True
             return
         
-        # 종료 신호 (노트 127)
-        if note_value == 127:
-            print("비밥 솔로 수신 완료")
-            receiving_notes = False
-            
-            if notes_array:
-                print(f"총 {len(notes_array)}개 노트 녹음 시작")
-                record_bebop_solo(notes_array)
-            
+        # 화성 모드가 아니면 무시
+        if not harmony_mode:
+            return
+        
+        # 화성 종료 신호 (노트 126)
+        if note_value == 126:
+            harmony_mode = False
+            play_harmony_notes()
+            print(f"화성 재생: {current_harmony_notes}")
             event.handled = True
             return
         
-        # MIDI 데이터 수집
-        midi_data.append(note_value)
+        # 노트 개수 받기 (화성 모드 시작 후 첫 번째)
+        if len(current_harmony_notes) == 0 and note_value > 0:
+            current_harmony_notes = []  # 초기화
+            print(f"화성 노트 개수: {note_value}")
+            event.handled = True
+            return
         
-        # 6개 값마다 노트 완성 (노트, 벨로시티, 길이_정수, 길이_소수, 위치_정수, 위치_소수)
-        if len(midi_data) % 6 == 0:
-            i = len(midi_data) - 6
-            note = midi_data[i]
-            velocity = midi_data[i+1]
-            length_whole = midi_data[i+2]
-            length_decimal = midi_data[i+3]
-            position_whole = midi_data[i+4]
-            position_decimal = midi_data[i+5]
-            
-            # 길이와 위치 계산
-            length = length_whole + (length_decimal / 10.0)
-            position = position_whole + (position_decimal / 10.0)
-            
-            # 노트 배열에 추가
-            notes_array.append((note, velocity, length, position))
-            print(f"노트 추가: {note} (vel={velocity}, len={length:.1f}, pos={position:.1f})")
+        # 화성 노트 수집
+        if harmony_mode and note_value > 10:  # 실제 노트 값
+            current_harmony_notes.append(note_value)
+            print(f"화성 노트 추가: {note_value}")
         
         event.handled = True
 
-def record_bebop_solo(notes_data):
-    """비밥 솔로를 FL Studio 피아노 롤에 녹음"""
-    # 재생 중이면 정지
-    if transport.isPlaying():
-        transport.stop()
+def play_harmony_notes():
+    """화성 노트들 재생"""
+    global current_harmony_notes, harmony_channel
     
-    # 시작 위치로 이동
-    transport.setSongPos(0, 2)
+    if not current_harmony_notes:
+        return
     
-    # 현재 선택된 채널 사용
-    channel = channels.selectedChannel()
-    print(f"채널 {channel}에 녹음 중...")
+    # 화성 전용 채널 선택
+    channels.selectOneChannel(harmony_channel)
     
-    # 위치별로 노트 그룹화
-    position_groups = {}
-    for note_data in notes_data:
-        position = note_data[3]  # 위치
-        if position not in position_groups:
-            position_groups[position] = []
-        position_groups[position].append(note_data)
+    # 모든 화성 노트 동시 재생
+    for note in current_harmony_notes:
+        if 0 <= note <= 127:
+            channels.midiNoteOn(harmony_channel, note, 80)  # 적당한 볼륨
+            print(f"화성 노트 온: {note}")
     
-    # 각 위치에서 노트 녹음
-    for position in sorted(position_groups.keys()):
-        notes_at_position = position_groups[position]
-        record_notes_at_position(notes_at_position, position, channel)
+    # 0.1초 후 노트 오프 (짧은 화성)
+    def note_off_delayed():
+        time.sleep(0.1)
+        for note in current_harmony_notes:
+            if 0 <= note <= 127:
+                channels.midiNoteOn(harmony_channel, note, 0)
     
-    print("비밥 솔로 녹음 완료!")
+    # 별도 스레드에서 노트 오프 실행
+    import threading
+    threading.Thread(target=note_off_delayed, daemon=True).start()
 
-def record_notes_at_position(notes_at_position, position, channel):
-    """특정 위치에서 노트들 녹음"""
-    # 가장 긴 노트 길이 찾기
-    max_length = max(note[2] for note in notes_at_position)
+def stop_all_harmony():
+    """모든 화성 노트 정지"""
+    global current_harmony_notes, harmony_channel
     
-    # 재생 위치 설정
-    ppq = general.getRecPPQ()
-    position_ticks = int(position * ppq)
-    transport.setSongPos(position_ticks, 2)
+    # 현재 재생 중인 모든 노트 끄기
+    for note in range(128):
+        channels.midiNoteOn(harmony_channel, note, 0)
     
-    # 녹음 모드 시작
-    if not transport.isRecording():
-        transport.record()
+    current_harmony_notes = []
+    print("모든 화성 정지")
+
+def play_harmony_arpeggio():
+    """화성을 아르페지오로 재생"""
+    global current_harmony_notes, harmony_channel
     
-    # 재생 시작
-    transport.start()
+    if not current_harmony_notes:
+        return
     
-    # 모든 노트 동시 재생
-    for note, velocity, length, _ in notes_at_position:
-        channels.midiNoteOn(channel, note, velocity)
+    channels.selectOneChannel(harmony_channel)
     
-    # 템포 가져오기
-    try:
-        import mixer
-        tempo = mixer.getCurrentTempo() / 1000
-    except:
-        tempo = 120  # 기본 템포
+    # 아르페지오 재생 (순차적으로)
+    def play_arpeggio():
+        for i, note in enumerate(current_harmony_notes):
+            if 0 <= note <= 127:
+                channels.midiNoteOn(harmony_channel, note, 70)
+                time.sleep(0.1)  # 100ms 간격
+                channels.midiNoteOn(harmony_channel, note, 0)
+                time.sleep(0.05)  # 50ms 쉼
     
-    # 대기 시간 계산
-    wait_time = (max_length * 60) / tempo
-    time.sleep(wait_time)
-    
-    # 노트 오프
-    for note, _, _, _ in notes_at_position:
-        channels.midiNoteOn(channel, note, 0)
-    
-    # 재생 정지
-    transport.stop()
-    
-    # 녹음 모드 종료
-    if transport.isRecording():
-        transport.record()
-    
-    # 짧은 대기
-    time.sleep(0.1)
+    import threading
+    threading.Thread(target=play_arpeggio, daemon=True).start()
 
 def OnTransport(isPlaying):
     """재생 상태 변경"""
@@ -177,3 +146,46 @@ def OnTransport(isPlaying):
 def OnTempoChange(tempo):
     """템포 변경"""
     return
+
+def OnChannelChange(channel):
+    """채널 변경 시 화성 채널 업데이트"""
+    global harmony_channel
+    harmony_channel = channel
+    print(f"화성 채널 변경: {harmony_channel}")
+    return
+
+def OnMixerChannelChange(channel):
+    """믹서 채널 변경"""
+    return
+
+def OnStatusChange(status):
+    """상태 변경"""
+    return
+
+# 추가 유틸리티 함수들
+def get_harmony_info():
+    """현재 화성 정보 반환"""
+    return {
+        "harmony_mode": harmony_mode,
+        "current_notes": current_harmony_notes,
+        "harmony_channel": harmony_channel
+    }
+
+def set_harmony_channel(channel):
+    """화성 채널 설정"""
+    global harmony_channel
+    if 0 <= channel < channels.channelCount():
+        harmony_channel = channel
+        print(f"화성 채널 설정: {harmony_channel}")
+        return True
+    return False
+
+def test_harmony_pattern():
+    """테스트 화성 패턴 재생"""
+    global current_harmony_notes
+    
+    # C major 코드 테스트
+    current_harmony_notes = [60, 64, 67, 72]  # C, E, G, C
+    play_harmony_notes()
+    
+    print("테스트 화성 재생 완료")

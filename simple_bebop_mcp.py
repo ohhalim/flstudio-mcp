@@ -1,9 +1,9 @@
-# simple_bebop_mcp.py
-# 간단한 비밥 솔로 MCP 서버
+# realtime_harmony_mcp.py
 
 import sys
 import time
-from typing import List, Tuple, Dict
+import threading
+from typing import List, Tuple, Dict, Set
 from mcp.server.fastmcp import FastMCP
 import mido
 from mido import Message
@@ -11,244 +11,214 @@ from mido import Message
 def debug_log(message):
     print(message, file=sys.stderr, flush=True)
 
-class BebopSoloGenerator:
-    """간단한 비밥 솔로 생성기"""
+class RealTimeHarmonyGenerator:
+    """실시간 화성 멜로디 생성기"""
     
     def __init__(self):
-        # 비밥 스케일 (반음 간격)
+        self.current_chord_notes = set()  # 현재 눌린 노트들
+        self.harmony_notes = []  # 생성된 화성 노트들
+        self.is_listening = False
+        self.input_port = None
+        self.output_port = None
+        
+        # 화성 스케일 정의
         self.scales = {
-            'major': [0, 2, 4, 5, 7, 8, 9, 11],
-            'dominant': [0, 2, 4, 5, 7, 9, 10, 11], 
-            'minor': [0, 2, 3, 5, 7, 9, 10, 11]
+            'major': [0, 2, 4, 5, 7, 9, 11],
+            'minor': [0, 2, 3, 5, 7, 8, 10], 
+            'dominant': [0, 2, 4, 5, 7, 9, 10],
+            'diminished': [0, 2, 3, 5, 6, 8, 9, 11]
         }
         
-        # 코드 타입 → 스케일 매핑
-        self.chord_scales = {
-            'maj': 'major', 'min': 'minor', 'dom': 'dominant'
+        # 화성 패턴 (루트 기준 상대음정)
+        self.harmony_patterns = {
+            'major': [2, 4, 6, 9],      # 3rd, 5th, 7th, 9th
+            'minor': [3, 5, 7, 10],     # minor 3rd, 5th, 7th, 9th  
+            'dominant': [4, 7, 10, 14], # 5th, 7th, 9th, 11th
+            'arpeggio': [12, 19, 24],   # 옥타브, 5th, 2옥타브
         }
         
-        # 고정 패턴들 (일관성을 위해)
-        self.patterns = {
-            'major': [0, 1, 2, 3, 4, 5, 6, 7, 6, 5, 4, 3, 2, 1],     # 상승-하강
-            'minor': [7, 6, 5, 4, 3, 2, 1, 0, 1, 2, 3, 4, 5, 6],     # 하강-상승  
-            'dominant': [0, 2, 1, 3, 2, 4, 3, 5, 4, 6, 5, 7, 6, 4]   # 지그재그
+        # 멜로디 패턴
+        self.melody_patterns = {
+            'ascending': [0, 2, 4, 5, 7, 9, 11, 12],
+            'descending': [12, 11, 9, 7, 5, 4, 2, 0],
+            'wave': [0, 4, 2, 5, 3, 7, 4, 9],
+            'chromatic': [0, 1, 2, 3, 4, 5, 6, 7]
         }
-        
-        # 고정 리듬 (8분음표 기반)
-        self.rhythms = [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
     
-    def detect_chord_type(self, notes: List[int]) -> str:
-        """간단한 코드 타입 감지"""
-        if len(notes) < 3:
-            return 'maj'
+    def setup_midi_ports(self, input_port_name=None, output_port_name=None):
+        """MIDI 포트 설정"""
+        try:
+            # 입력 포트 설정 (외부 키보드)
+            input_ports = mido.get_input_names()
+            if input_port_name and input_port_name in input_ports:
+                self.input_port = mido.open_input(input_port_name, callback=self.on_midi_input)
+            elif input_ports:
+                # 첫 번째 사용가능한 입력 포트 사용
+                self.input_port = mido.open_input(input_ports[0], callback=self.on_midi_input)
+                debug_log(f"입력 포트 연결: {input_ports[0]}")
+            
+            # 출력 포트 설정 (FL Studio로)
+            output_ports = mido.get_output_names()
+            if output_port_name and output_port_name in output_ports:
+                self.output_port = mido.open_output(output_port_name)
+            elif output_ports:
+                self.output_port = mido.open_output(output_ports[0])
+                debug_log(f"출력 포트 연결: {output_ports[0]}")
+                
+            return True
+        except Exception as e:
+            debug_log(f"MIDI 포트 설정 오류: {e}")
+            return False
+    
+    def on_midi_input(self, message):
+        """외부 키보드에서 MIDI 입력 받을 때"""
+        if not self.is_listening:
+            return
+            
+        if message.type == 'note_on' and message.velocity > 0:
+            # 노트 온: 코드에 추가
+            self.current_chord_notes.add(message.note)
+            debug_log(f"노트 추가: {message.note}, 현재 코드: {sorted(self.current_chord_notes)}")
+            
+            # 화성 멜로디 생성 및 전송
+            if len(self.current_chord_notes) >= 2:  # 최소 2개 노트
+                self.generate_and_send_harmony()
+                
+        elif message.type == 'note_off' or (message.type == 'note_on' and message.velocity == 0):
+            # 노트 오프: 코드에서 제거
+            self.current_chord_notes.discard(message.note)
+            debug_log(f"노트 제거: {message.note}, 현재 코드: {sorted(self.current_chord_notes)}")
+            
+            # 남은 노트가 있으면 다시 화성 생성
+            if len(self.current_chord_notes) >= 2:
+                self.generate_and_send_harmony()
+            else:
+                # 모든 화성 노트 끄기
+                self.stop_all_harmony_notes()
+    
+    def detect_chord_type(self, notes: Set[int]) -> str:
+        """코드 타입 감지"""
+        if len(notes) < 2:
+            return 'major'
         
-        # 노트들을 반음 간격으로 정규화
-        intervals = []
-        root = min(notes) % 12
-        for note in notes:
-            intervals.append((note - root) % 12)
+        notes_list = sorted(list(notes))
+        root = notes_list[0] % 12
+        
+        # 루트 기준 상대 음정 계산
+        intervals = [(note - root) % 12 for note in notes_list]
         intervals = sorted(list(set(intervals)))
         
-        # 간단한 패턴 매칭
-        if intervals[:3] == [0, 3, 7]:  # 마이너 트라이어드
-            return 'min'
-        elif intervals[:4] == [0, 4, 7, 10]:  # 도미넌트 7
-            return 'dom'
-        else:  # 기본 메이저
-            return 'maj'
+        # 패턴 매칭
+        if 3 in intervals:  # 단3도 포함
+            return 'minor'
+        elif 10 in intervals:  # 단7도 포함
+            return 'dominant'
+        elif len(intervals) >= 4:  # 복잡한 코드
+            return 'diminished'
+        else:
+            return 'major'
     
-    def generate_solo(self, chord_notes: List[int], measures: int = 2) -> List[Tuple]:
-        """코드에 맞는 비밥 솔로 생성"""
-        # 코드 타입 감지
+    def generate_harmony_melody(self, chord_notes: Set[int], pattern_type='major') -> List[int]:
+        """화성 멜로디 생성"""
+        if not chord_notes:
+            return []
+        
+        root = min(chord_notes) % 12
         chord_type = self.detect_chord_type(chord_notes)
         
-        # 루트 노트 계산
-        root = min(chord_notes) % 12
+        # 화성 패턴 선택
+        harmony_pattern = self.harmony_patterns.get(chord_type, self.harmony_patterns['major'])
+        melody_pattern = self.melody_patterns.get(pattern_type, self.melody_patterns['ascending'])
         
-        # 스케일 선택
-        scale_type = self.chord_scales.get(chord_type, 'major')
-        scale = self.scales[scale_type]
+        # 베이스 옥타브 설정 (입력된 코드보다 한 옥타브 위)
+        base_octave = max(chord_notes) + 12
         
-        # 스케일 노트들 (C4 기준, 2옥타브)
-        base_octave = 60  # C4
-        scale_notes = []
-        for octave in range(2):  # 2옥타브
-            for interval in scale:
-                note = base_octave + root + interval + (octave * 12)
-                if 48 <= note <= 84:  # C3~C6 범위
-                    scale_notes.append(note)
+        # 화성 노트 생성
+        harmony_notes = []
+        for interval in harmony_pattern[:4]:  # 최대 4개 화성 노트
+            note = base_octave + interval
+            if 48 <= note <= 96:  # C3~C7 범위
+                harmony_notes.append(note)
         
-        # 패턴과 리듬 선택
-        pattern = self.patterns[scale_type]
-        rhythm = self.rhythms
+        return harmony_notes
+    
+    def generate_and_send_harmony(self):
+        """화성 생성 및 FL Studio 전송"""
+        if not self.current_chord_notes or not self.output_port:
+            return
         
-        # 솔로 노트 생성
-        notes = []
-        current_pos = 0.0
-        total_beats = measures * 4  # 4/4 박자
+        # 이전 화성 노트들 끄기
+        self.stop_all_harmony_notes()
         
-        pattern_idx = 0
-        rhythm_idx = 0
+        # 새 화성 생성
+        self.harmony_notes = self.generate_harmony_melody(self.current_chord_notes)
         
-        while current_pos < total_beats:
-            # 스케일 음도 선택
-            scale_degree = pattern[pattern_idx % len(pattern)]
-            scale_degree = min(scale_degree, len(scale_notes) - 1)
-            
-            note = scale_notes[scale_degree]
-            velocity = 90  # 고정 벨로시티
-            length = rhythm[rhythm_idx % len(rhythm)]
-            
-            # 마디 경계 체크
-            if current_pos + length > total_beats:
-                length = total_beats - current_pos
-            
-            notes.append((note, velocity, length, current_pos))
-            
-            current_pos += length
-            pattern_idx += 1
-            rhythm_idx += 1
+        # FL Studio로 화성 노트 전송
+        self.send_harmony_to_fl(self.harmony_notes)
         
-        debug_log(f"생성된 솔로: {len(notes)}개 노트, 코드타입: {chord_type}")
-        return notes
+        debug_log(f"화성 전송: {self.harmony_notes}")
+    
+    def send_harmony_to_fl(self, harmony_notes: List[int]):
+        """FL Studio로 화성 노트 전송"""
+        if not self.output_port:
+            return
+        
+        # 시작 신호
+        self.send_midi_note(1)  # 화성 모드 신호
+        time.sleep(0.01)
+        
+        # 노트 개수
+        self.send_midi_note(len(harmony_notes))
+        time.sleep(0.01)
+        
+        # 각 화성 노트 전송
+        for note in harmony_notes:
+            self.send_midi_note(note)
+            time.sleep(0.01)
+        
+        # 종료 신호
+        self.send_midi_note(126)
+        time.sleep(0.01)
+    
+    def stop_all_harmony_notes(self):
+        """모든 화성 노트 끄기"""
+        if not self.output_port:
+            return
+        
+        # 정지 신호
+        self.send_midi_note(2)  # 화성 정지 신호
+        time.sleep(0.01)
+    
+    def send_midi_note(self, note: int, velocity: int = 100):
+        """MIDI 노트 전송"""
+        if self.output_port:
+            note_on = Message('note_on', note=note, velocity=velocity)
+            self.output_port.send(note_on)
+            time.sleep(0.01)
+            note_off = Message('note_off', note=note, velocity=0)
+            self.output_port.send(note_off)
+    
+    def start_listening(self):
+        """외부 키보드 듣기 시작"""
+        self.is_listening = True
+        debug_log("실시간 화성 생성 시작")
+    
+    def stop_listening(self):
+        """외부 키보드 듣기 중지"""
+        self.is_listening = False
+        self.stop_all_harmony_notes()
+        self.current_chord_notes.clear()
+        debug_log("실시간 화성 생성 중지")
 
 # MCP 서버 초기화
 try:
-    debug_log("비밥 솔로 MCP 서버 시작...")
-    
-    # MIDI 포트 설정
-    available_ports = mido.get_output_names()
-    if not available_ports:
-        debug_log("MIDI 출력 포트를 찾을 수 없습니다!")
-        sys.exit(1)
-    
-    midi_port = available_ports[0]
-    output_port = mido.open_output(midi_port)
-    debug_log(f"MIDI 포트 연결: {midi_port}")
+    debug_log("실시간 화성 MCP 서버 시작...")
     
     # FastMCP 서버 생성
-    mcp = FastMCP("bebop_solo")
+    mcp = FastMCP("realtime_harmony")
     
-    # 비밥 생성기 인스턴스
-    bebop_generator = BebopSoloGenerator()
-    
-    def send_midi_note(note: int, velocity: int = 100, duration: float = 0.01):
-        """MIDI 노트 전송"""
-        note_on = Message('note_on', note=note, velocity=velocity)
-        output_port.send(note_on)
-        time.sleep(duration)
-        note_off = Message('note_off', note=note, velocity=0)
-        output_port.send(note_off)
-    
-    def send_solo_to_fl(notes_data: List[Tuple]):
-        """FL Studio로 솔로 데이터 전송"""
-        # 시작 신호 (노트 0)
-        send_midi_note(0)
-        time.sleep(0.1)
-        
-        # 노트 개수 전송
-        send_midi_note(min(127, len(notes_data)))
-        time.sleep(0.1)
-        
-        # 각 노트의 6개 값 전송
-        for note, velocity, length, position in notes_data:
-            # 1. 노트 값
-            send_midi_note(int(note))
-            # 2. 벨로시티
-            send_midi_note(int(velocity))
-            # 3. 길이 정수부
-            length_whole = int(length)
-            send_midi_note(length_whole)
-            # 4. 길이 소수부
-            length_decimal = int((length - length_whole) * 10) % 10
-            send_midi_note(length_decimal)
-            # 5. 위치 정수부
-            position_whole = int(position)
-            send_midi_note(position_whole)
-            # 6. 위치 소수부
-            position_decimal = int((position - position_whole) * 10) % 10
-            send_midi_note(position_decimal)
-            
-            time.sleep(0.01)
-        
-        # 종료 신호 (노트 127)
-        send_midi_note(127)
-        time.sleep(0.1)
-        
-        # 자동 녹음 (노트 10)
-        send_midi_note(10)
-    
-    @mcp.tool()
-    def generate_bebop_solo(chord_notes_str: str, measures: int = 2):
-        """
-        코드 노트로부터 비밥 솔로 생성 및 FL Studio 전송
-        
-        Args:
-            chord_notes_str: 쉼표로 구분된 MIDI 노트 번호 (예: "60,64,67")
-            measures: 생성할 마디 수 (기본: 2)
-        """
-        try:
-            # 코드 노트 파싱
-            chord_notes = [int(n.strip()) for n in chord_notes_str.split(',')]
-            
-            if len(chord_notes) < 2:
-                return "최소 2개 이상의 노트가 필요합니다."
-            
-            # 비밥 솔로 생성
-            solo_notes = bebop_generator.generate_solo(chord_notes, measures)
-            
-            # FL Studio로 전송
-            send_solo_to_fl(solo_notes)
-            
-            return f"비밥 솔로 생성 완료: {len(solo_notes)}개 노트, {measures}마디"
-            
-        except Exception as e:
-            return f"오류 발생: {e}"
-    
-    @mcp.tool()
-    def test_chord_types():
-        """다양한 코드 타입 테스트"""
-        test_chords = {
-            'C major': [60, 64, 67],      # C, E, G
-            'C minor': [60, 63, 67],      # C, Eb, G  
-            'C7': [60, 64, 67, 70],       # C, E, G, Bb
-            'D minor': [62, 65, 69],      # D, F, A
-            'G7': [67, 71, 74, 77]        # G, B, D, F
-        }
-        
-        results = []
-        for chord_name, notes in test_chords.items():
-            chord_type = bebop_generator.detect_chord_type(notes)
-            results.append(f"{chord_name}: {chord_type}")
-        
-        return "\n".join(results)
-    
-    @mcp.tool()
-    def quick_solo(chord_name: str):
-        """
-        코드 이름으로 빠른 솔로 생성
-        
-        Args:
-            chord_name: 코드 이름 (예: "Cmaj", "Gmin", "F7")
-        """
-        # 간단한 코드 이름 파싱
-        chord_map = {
-            'C': 60, 'D': 62, 'E': 64, 'F': 65, 'G': 67, 'A': 69, 'B': 71,
-            'Cmaj': [60, 64, 67], 'Cmin': [60, 63, 67], 'C7': [60, 64, 67, 70],
-            'Gmaj': [67, 71, 74], 'Gmin': [67, 70, 74], 'G7': [67, 71, 74, 77],
-            'Fmaj': [65, 69, 72], 'Fmin': [65, 68, 72], 'F7': [65, 69, 72, 75],
-            'Dmaj': [62, 66, 69], 'Dmin': [62, 65, 69], 'D7': [62, 66, 69, 72]
-        }
-        
-        chord_notes = chord_map.get(chord_name)
-        if not chord_notes:
-            return f"알 수 없는 코드: {chord_name}"
-        
-        # 솔로 생성 및 전송
-        solo_notes = bebop_generator.generate_solo(chord_notes, 2)
-        send_solo_to_fl(solo_notes)
-        
-        return f"{chord_name} 코드에 대한 비밥 솔로 생성 완료"
+    # 화성 생성기 인스턴스
+    harmony_generator = RealTimeHarmonyGenerator()
     
     @mcp.tool()
     def list_midi_ports():
@@ -259,11 +229,58 @@ try:
         return {
             "input_ports": input_ports,
             "output_ports": output_ports,
-            "current_output": midi_port
+            "status": "listening" if harmony_generator.is_listening else "stopped"
         }
     
+    @mcp.tool()
+    def start_harmony_listening(input_port: str = None, output_port: str = None):
+        """실시간 화성 생성 시작"""
+        try:
+            # MIDI 포트 설정
+            if harmony_generator.setup_midi_ports(input_port, output_port):
+                harmony_generator.start_listening()
+                return f"실시간 화성 생성 시작됨 (입력: {input_port or 'auto'}, 출력: {output_port or 'auto'})"
+            else:
+                return "MIDI 포트 설정 실패"
+        except Exception as e:
+            return f"오류: {e}"
+    
+    @mcp.tool()
+    def stop_harmony_listening():
+        """실시간 화성 생성 중지"""
+        try:
+            harmony_generator.stop_listening()
+            return "실시간 화성 생성 중지됨"
+        except Exception as e:
+            return f"오류: {e}"
+    
+    @mcp.tool()
+    def get_harmony_status():
+        """현재 화성 생성 상태"""
+        return {
+            "listening": harmony_generator.is_listening,
+            "current_chord": sorted(list(harmony_generator.current_chord_notes)),
+            "harmony_notes": harmony_generator.harmony_notes,
+            "input_connected": harmony_generator.input_port is not None,
+            "output_connected": harmony_generator.output_port is not None
+        }
+    
+    @mcp.tool()
+    def test_harmony(chord_notes_str: str):
+        """화성 테스트 (실시간 모드가 아닐 때)"""
+        try:
+            chord_notes = set(int(n.strip()) for n in chord_notes_str.split(','))
+            harmony_notes = harmony_generator.generate_harmony_melody(chord_notes)
+            
+            if harmony_generator.output_port:
+                harmony_generator.send_harmony_to_fl(harmony_notes)
+            
+            return f"테스트 화성 생성: {harmony_notes}"
+        except Exception as e:
+            return f"오류: {e}"
+    
     if __name__ == "__main__":
-        debug_log("비밥 솔로 MCP 서버 실행 중...")
+        debug_log("실시간 화성 MCP 서버 실행 중...")
         mcp.run(transport='stdio')
 
 except Exception as e:
